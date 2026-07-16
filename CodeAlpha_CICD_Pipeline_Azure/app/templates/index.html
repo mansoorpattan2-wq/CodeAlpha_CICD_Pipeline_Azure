@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>CodeAlpha CI/CD Pipeline Demo</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <h1>CodeAlpha DevOps Internship</h1>
+        <h2>CI/CD Pipeline Demo Application</h2>
+        <div class="card">
+            <p><strong>App Version:</strong> {{ version }}</p>
+            <p><strong>Environment:</strong> {{ environment }}</p>
+            <p><strong>Server Time:</strong> {{ server_time }}</p>
+        </div>
+        <p class="footer">Deployed automatically via GitHub -> Azure Pipelines -> ACR -> Azure App Service</p>
+    </div>
+</body>
+</html>

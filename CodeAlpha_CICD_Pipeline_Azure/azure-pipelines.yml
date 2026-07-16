@@ -1,0 +1,106 @@
+# =============================================================================
+# azure-pipelines.yml
+# -----------------------------------------------------------------------------
+# This file defines the CI/CD pipeline. Azure Pipelines reads this file
+# automatically whenever code is pushed to the connected GitHub branch.
+#
+# Pipeline flow:
+#   1) trigger        -> WHEN the pipeline should run
+#   2) variables       -> reusable values (names, resource group, etc.)
+#   3) Stage: Build     -> installs deps, runs tests, builds & pushes Docker image to ACR
+#   4) Stage: Deploy     -> deploys that image to Azure App Service
+# =============================================================================
+
+# Run the pipeline automatically whenever code is pushed to "main"
+trigger:
+  branches:
+    include:
+      - main
+
+# ---------------------------------------------------------------------------
+# VARIABLES — update these to match the Azure resources you create
+# (see docs/SETUP_GUIDE_WINDOWS.md for exact az cli commands to create them)
+# ---------------------------------------------------------------------------
+variables:
+  dockerRegistryServiceConnection: 'acr-service-connection'   # Name of the Service Connection you create in Azure DevOps
+  imageRepository: 'codealpha-cicd-app'                       # Name for the image inside ACR
+  containerRegistry: 'codealphaacr.azurecr.io'                 # Your ACR login server (replace codealphaacr with your ACR name)
+  dockerfilePath: '$(Build.SourcesDirectory)/Dockerfile'
+  tag: '$(Build.BuildId)'                                      # Every build gets a unique, traceable image tag
+  webAppName: 'codealpha-cicd-webapp'                          # Your Azure App Service (Web App) name
+  vmImageName: 'ubuntu-latest'                                 # The build agent OS
+
+# ---------------------------------------------------------------------------
+# STAGE 1: BUILD — installs dependencies, runs tests, builds & pushes image
+# ---------------------------------------------------------------------------
+stages:
+  - stage: Build
+    displayName: 'Build, Test and Push Docker Image'
+    jobs:
+      - job: Build
+        displayName: 'Build Job'
+        pool:
+          vmImage: $(vmImageName)
+        steps:
+
+          # Step 1: Set up Python so we can run our unit tests before building the image
+          - task: UsePythonVersion@0
+            inputs:
+              versionSpec: '3.11'
+            displayName: 'Use Python 3.11'
+
+          # Step 2: Install dependencies + dev dependencies (pytest)
+          - script: |
+              python -m pip install --upgrade pip
+              pip install -r app/requirements.txt
+              pip install -r app/requirements-dev.txt
+            displayName: 'Install dependencies'
+
+          # Step 3: Run automated tests — pipeline STOPS here if tests fail
+          # (this enforces the DevOps principle: never build/deploy broken code)
+          - script: |
+              pytest tests/ --junitxml=test-results.xml
+            displayName: 'Run unit tests'
+
+          # Step 4: Publish test results so they're visible in the Azure DevOps UI
+          - task: PublishTestResults@2
+            condition: succeededOrFailed()
+            inputs:
+              testResultsFiles: 'test-results.xml'
+              testRunTitle: 'Flask App Unit Tests'
+
+          # Step 5: Build the Docker image and push it to Azure Container Registry
+          - task: Docker@2
+            displayName: 'Build and push image to ACR'
+            inputs:
+              command: buildAndPush
+              repository: $(imageRepository)
+              dockerfile: $(dockerfilePath)
+              containerRegistry: $(dockerRegistryServiceConnection)
+              tags: |
+                $(tag)
+                latest
+
+  # -------------------------------------------------------------------------
+  # STAGE 2: DEPLOY — deploys the freshly built image to Azure App Service
+  # -------------------------------------------------------------------------
+  - stage: Deploy
+    displayName: 'Deploy to Azure App Service'
+    dependsOn: Build
+    condition: succeeded()   # Only deploy if the Build stage succeeded
+    jobs:
+      - deployment: Deploy
+        displayName: 'Deploy Job'
+        pool:
+          vmImage: $(vmImageName)
+        environment: 'production'   # Creates an "environment" in Azure DevOps for deployment history/approvals
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: AzureWebAppContainer@1
+                  displayName: 'Deploy container to Azure App Service'
+                  inputs:
+                    azureSubscription: 'azure-service-connection'  # Service connection to your Azure subscription
+                    appName: $(webAppName)
+                    containers: '$(containerRegistry)/$(imageRepository):$(tag)'
